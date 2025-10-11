@@ -7,7 +7,7 @@
 #include "ShipPawn.generated.h"
 
 UCLASS()
-class SHIP2_API AShipPawn : public APawn
+class SHIP2_API AShipPawn : public APawn  //Bitno da se stavi naziv projekta SHIP2_API
 {
     GENERATED_BODY()
 
