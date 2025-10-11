@@ -1,13 +1,14 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
 #include "Camera/CameraComponent.h"
 #include "Components/StaticMeshComponent.h"
-#include "ShipPawn.generated.h"
+#include "GameFramework/FloatingPawnMovement.h"
+#include "ShipPawn.generated.h"   // ⇦ MORA da bude POSLEDNJI include
 
 UCLASS()
-class SHIP2_API AShipPawn : public APawn  //Bitno da se stavi naziv projekta SHIP2_API
+class SHIP2_API AShipPawn : public APawn
 {
     GENERATED_BODY()
 
@@ -16,11 +17,10 @@ public:
 
 protected:
     virtual void BeginPlay() override;
-    virtual void Tick(float DeltaTime) override;
-    virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 
-    void MoveForward(float Value);
-    void MoveRight(float Value);
+public:
+    virtual void Tick(float DeltaTime) override;
+    virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
 
 private:
     UPROPERTY(VisibleAnywhere)
@@ -29,5 +29,9 @@ private:
     UPROPERTY(VisibleAnywhere)
     UCameraComponent* Camera;
 
-    FVector CurrentVelocity;
+    UPROPERTY(VisibleAnywhere)
+    UFloatingPawnMovement* MovementComponent;
+
+    void MoveForward(float Value);
+    void MoveRight(float Value);
 };

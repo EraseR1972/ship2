@@ -1,52 +1,34 @@
+// Fill out your copyright notice in the Description page of Project Settings.
+
+
 #include "ShipPawn.h"
 
+// Sets default values
 AShipPawn::AShipPawn()
 {
-    PrimaryActorTick.bCanEverTick = true;
+ 	// Set this pawn to call Tick() every frame.  You can turn this off to improve performance if you don't need it.
+	PrimaryActorTick.bCanEverTick = true;
 
-    RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("RootComponent"));
-
-    ShipMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ShipMesh"));
-    ShipMesh->SetupAttachment(RootComponent);
-
-    Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
-    Camera->SetupAttachment(RootComponent);
-    Camera->SetRelativeLocation(FVector(-300.f, 0.f, 200.f));
-    Camera->SetRelativeRotation(FRotator(-20.f, 0.f, 0.f));
-
-    AutoPossessPlayer = EAutoReceiveInput::Player0;
 }
 
+// Called when the game starts or when spawned
 void AShipPawn::BeginPlay()
 {
-    Super::BeginPlay();
+	Super::BeginPlay();
+	
 }
 
+// Called every frame
 void AShipPawn::Tick(float DeltaTime)
 {
-    Super::Tick(DeltaTime);
+	Super::Tick(DeltaTime);
 
-    if (!CurrentVelocity.IsNearlyZero())
-    {
-        FVector NewLocation = GetActorLocation() + (CurrentVelocity * DeltaTime);
-        SetActorLocation(NewLocation);
-    }
 }
 
+// Called to bind functionality to input
 void AShipPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
-    Super::SetupPlayerInputComponent(PlayerInputComponent);
+	Super::SetupPlayerInputComponent(PlayerInputComponent);
 
-    PlayerInputComponent->BindAxis("MoveForward", this, &AShipPawn::MoveForward);
-    PlayerInputComponent->BindAxis("MoveRight", this, &AShipPawn::MoveRight);
 }
 
-void AShipPawn::MoveForward(float Value)
-{
-    CurrentVelocity.X = FMath::Clamp(Value, -1.f, 1.f) * 600.f;
-}
-
-void AShipPawn::MoveRight(float Value)
-{
-    CurrentVelocity.Y = FMath::Clamp(Value, -1.f, 1.f) * 600.f;
-}
