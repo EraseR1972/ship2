@@ -4,7 +4,6 @@
 #include "GameFramework/Pawn.h" // Uključuje baznu klasu za Pawn, koja predstavlja kontrolisane objekte u igri
 #include "Camera/CameraComponent.h" // Uključuje komponentu za upravljanje kamerom u igri
 #include "Components/StaticMeshComponent.h" // Uključuje komponentu za statički mesh (vizuelni model broda)
-#include "Components/SpringArmComponent.h" // Uključuje komponentu za spring arm (za glatko praćenje kamere)
 #include "GameFramework/FloatingPawnMovement.h" // Uključuje komponentu za kretanje bez gravitacije (6DOF)
 #include "ShipPawn.generated.h" // Uključuje automatski generisane definicije za UCLASS
 
@@ -13,8 +12,11 @@ class SHIP2_API AShipPawn : public APawn // Definiše klasu AShipPawn koja nasle
 {
     GENERATED_BODY() // Automatski generiše potrebne makroe za Unreal Engine klasu
 
-public: // Javne funkcije i metode
+public: // Javne funkcije, promenljive i metode
     AShipPawn(); // Deklaracija konstruktora za inicijalizaciju broda
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement") // Svojstvo za boost stanje, može se menjati u editoru i Blueprint-u
+        bool bIsBoosting = false; // Promenljiva koja označava da li je boost (ubrzanje) aktivan
 
 protected: // Zaštićene funkcije dostupne naslednicima
     virtual void BeginPlay() override; // Preklopljena funkcija koja se poziva kada se objekat spawnuje u igri
@@ -27,17 +29,11 @@ private: // Privatne promenljive i funkcije, dostupne samo unutar klase
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (AllowPrivateAccess = "true")) // Svojstvo vidljivo u editoru, samo za čitanje u Blueprint-u, u kategoriji "Components"
         UStaticMeshComponent* ShipMesh; // Pokazivač na statički mesh komponentu koja predstavlja vizuelni model broda
 
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (AllowPrivateAccess = "true")) // Svojstvo za spring arm komponentu, vidljivo u editoru
-        USpringArmComponent* SpringArm; // Pokazivač na spring arm komponentu za glatko pozicioniranje kamere
-
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (AllowPrivateAccess = "true")) // Svojstvo za kameru, vidljivo u editoru
         UCameraComponent* Camera; // Pokazivač na komponentu kamere koja prati brod
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (AllowPrivateAccess = "true")) // Svojstvo za komponentu kretanja, vidljivo u editoru
         UFloatingPawnMovement* MovementComponent; // Pokazivač na komponentu za kretanje bez gravitacije (6DOF)
-
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement") // Svojstvo za boost stanje, može se menjati u editoru i Blueprint-u
-        bool bIsBoosting = false; // Promenljiva koja označava da li je boost (ubrzanje) aktivan
 
     void MoveForward(float Value); // Funkcija za kretanje napred/nazad (W/S tasteri)
     void MoveRight(float Value); // Funkcija za kretanje levo/desno (A/D tasteri)

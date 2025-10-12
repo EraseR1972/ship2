@@ -2,7 +2,6 @@
 #include "Components/InputComponent.h" // Uključuje komponentu za obradu inputa
 #include "GameFramework/FloatingPawnMovement.h" // Uključuje komponentu za kretanje bez gravitacije
 #include "Camera/CameraComponent.h" // Uključuje komponentu za kameru
-#include "Components/SpringArmComponent.h" // Uključuje komponentu za spring arm
 #include "DrawDebugHelpers.h" // Uključuje funkcije za debag linije
 #include "Engine/Engine.h" // Uključuje osnovne funkcije Unreal Engine-a
 #include "GameFramework/PlayerController.h" // Uključuje klasu za kontroler igrača
@@ -19,22 +18,10 @@ AShipPawn::AShipPawn() // Konstruktor klase AShipPawn
     ShipMesh->SetSimulatePhysics(false); // Isključuje fiziku za mesh
     ShipMesh->SetMobility(EComponentMobility::Movable); // Omogućava kretanje mesha
 
-    // Podešavanje SpringArm
-    SpringArm = CreateDefaultSubobject<USpringArmComponent>(TEXT("SpringArm")); // Kreira spring arm komponentu
-    SpringArm->SetupAttachment(RootComponent); // Pričvršćuje spring arm za ShipMesh
-    SpringArm->SetRelativeLocation(FVector(0.f, 0.f, 0.f)); // Postavlja relativnu poziciju na (0,0,0)
-    SpringArm->TargetArmLength = 300.f; // Postavlja dužinu spring arm-a na 300 jedinica
-    SpringArm->bUsePawnControlRotation = false; // Isključuje kontrolu rotacije od strane kontrolera
-    SpringArm->bEnableCameraLag = false; // Isključuje kašnjenje kamere
-    SpringArm->bEnableCameraRotationLag = false; // Isključuje kašnjenje rotacije kamere
-    SpringArm->bDoCollisionTest = false; // Isključuje proveru kolizije za spring arm
-    SpringArm->bInheritPitch = true; // Omogućava nasleđivanje pitch rotacije broda
-    SpringArm->bInheritYaw = true; // Omogućava nasleđivanje yaw rotacije broda
-    SpringArm->bInheritRoll = true; // Omogućava nasleđivanje roll rotacije broda
-
     // Podešavanje Camera
     Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera")); // Kreira komponentu kamere
-    Camera->SetupAttachment(SpringArm); // Pričvršćuje kameru za spring arm
+    Camera->SetupAttachment(RootComponent); // Pričvršćuje kameru direktno za ShipMesh
+    Camera->SetRelativeLocation(FVector(-300.f, 0.f, 100.f)); // Postavlja kameru iza i iznad broda
     Camera->SetRelativeRotation(FRotator(-15.f, 0.f, 0.f)); // Postavlja blagi nagib kamere nadole
     Camera->bUsePawnControlRotation = false; // Isključuje kontrolu rotacije od strane kontrolera
 
