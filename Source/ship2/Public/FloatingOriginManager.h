@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include "CoreMinimal.h"
@@ -7,37 +6,70 @@
 
 class APawn;
 
+/**
+ * FloatingOriginManager (Sector/Chunk based, Infinite Space)
+ * - Ne koristi SetNewWorldOrigin.
+ * - Održava "prozor" sektora oko igrača: wrap-uje/pomera aktere koji ispadnu iz prozora
+ *   za celobrojne veličine sektora (torus wrapping).
+ * - Crta vizuelne "box" sektore oko igrača.
+ */
 UCLASS()
 class SHIP2_API AFloatingOriginManager : public AActor
 {
-	GENERATED_BODY()
+    GENERATED_BODY()
 
 public:
-	AFloatingOriginManager();
+    AFloatingOriginManager();
 
 protected:
-	virtual void BeginPlay() override;
-	virtual void Tick(float DeltaTime) override;
+    virtual void BeginPlay() override;
+    virtual void Tick(float DeltaTime) override;
 
 private:
-	UPROPERTY(EditAnywhere, Category="Floating Origin")
-	APawn* TargetPawn = nullptr;
+    /** Pawn koji se prati (ako je null, automatski uzima PlayerPawn(0)). */
+    UPROPERTY(EditAnywhere, Category="Sectors")
+    APawn* TargetPawn = nullptr;
 
-	UPROPERTY(EditAnywhere, Category="Floating Origin")
-	float OriginThreshold = 10000.f;
+    /** Veličina sektora (dužina ivice box-a) u cm. */
+    UPROPERTY(EditAnywhere, Category="Sectors", meta=(ClampMin="1000.0", UIMin="1000.0"))
+    float SectorSize = 50000.f;
 
-	UPROPERTY(EditAnywhere, Category="Floating Origin")
-	float GridSnap = 1000.f;
+    /** Poluprečnik prozora (koliko sektora po osi oko igrača držimo aktivno). */
+    UPROPERTY(EditAnywhere, Category="Sectors", meta=(ClampMin="1", UIMin="1"))
+    int32 WindowRadius = 1; // ukupno 3x3x3 ako je 1
 
-	UPROPERTY(EditAnywhere, Category="Floating Origin")
-	float FadeTime = 0.2f;
+    /** Period osvežavanja sektorskog wrappovanja (sekunde). 0 = svaki frame. */
+    UPROPERTY(EditAnywhere, Category="Sectors", meta=(ClampMin="0.0", UIMin="0.0"))
+    float UpdatePeriod = 0.1f;
 
-	UPROPERTY(VisibleAnywhere, Category="Floating Origin|Debug")
-	int32 RebaseCount = 0;
+    /** (Opcionalno) Pomeraj/Wrap-uj samo aktere sa ovim tagom. */
+    UPROPERTY(EditAnywhere, Category="Sectors|Filter")
+    bool bUseTagFilter = false;
 
-	float CooldownAfterRebase = 0.f;
+    /** Tag koji obeležava aktere koji se pomeraju (koristi se ako je bUseTagFilter = true). */
+    UPROPERTY(EditAnywhere, Category="Sectors|Filter")
+    FName MoveTag = FName(TEXT("Shiftable"));
 
-	void CheckAndRebaseOrigin();
-	void SmoothCameraFade(bool bFadeOut);
-	void DrawDebugInfo();
+    /** Debug prikaz sektora. */
+    UPROPERTY(EditAnywhere, Category="Sectors|Debug")
+    bool bDrawSectorBoxes = true;
+
+    /** Koliko okvira sektora crtati po osi (uvek 2*WindowRadius+1). */
+    UPROPERTY(EditAnywhere, Category="Sectors|Debug", meta=(ClampMin="1", UIMin="1"))
+    int32 DebugDrawExtraRadius = 0; // dodatnih prstenova za prikaz (samo debug)
+
+    /** Broj wrap-ova koje smo uradili. */
+    UPROPERTY(VisibleAnywhere, Category="Sectors|Debug")
+    int32 WrapCount = 0;
+
+    /** Interno vreme za periodično osvežavanje. */
+    float TimeAcc = 0.f;
+
+private:
+    void UpdateSectors(float DeltaTime);
+    void WrapActorsToWindow(const FIntVector& PlayerSector, int32 Radius);
+    void DrawSectorGrid(const FIntVector& PlayerSector, int32 Radius) const;
+
+    static FIntVector WorldToSector(const FVector& Position, float InSectorSize);
+    static FVector SectorToWorldCenter(const FIntVector& Sector, float InSectorSize);
 };

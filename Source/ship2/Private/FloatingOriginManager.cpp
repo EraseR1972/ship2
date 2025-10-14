@@ -1,11 +1,11 @@
-
 #include "FloatingOriginManager.h"
 #include "Kismet/GameplayStatics.h"
 #include "Engine/World.h"
 #include "Engine/Engine.h"
-#include "GameFramework/PlayerController.h"
 #include "GameFramework/Pawn.h"
 #include "DrawDebugHelpers.h"
+#include "EngineUtils.h" // TActorIterator
+#include "Math/UnrealMathUtility.h"
 
 AFloatingOriginManager::AFloatingOriginManager()
 {
@@ -21,11 +21,10 @@ void AFloatingOriginManager::BeginPlay()
         TargetPawn = UGameplayStatics::GetPlayerPawn(GetWorld(), 0);
     }
 
-    UE_LOG(LogTemp, Display, TEXT("[FloatingOrigin] Initialized (DebugProtected) TargetPawn=%p World=%p"), TargetPawn, GetWorld());
-
     if (GEngine)
     {
-        GEngine->AddOnScreenDebugMessage(-1, 3.f, FColor::Green, TEXT("[FloatingOrigin] DebugProtected version running"));
+        GEngine->AddOnScreenDebugMessage(-1, 3.f, FColor::Green,
+            TEXT("[Sectors] Manager ready (chunk wrap + visual boxes)"));
     }
 }
 
@@ -33,146 +32,125 @@ void AFloatingOriginManager::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
 
-    if (!IsValid(this) || !IsValid(GetWorld()))
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[FloatingOrigin] Invalid self or world in Tick"));
-        return;
-    }
-
-    if (CooldownAfterRebase > 0.f)
-    {
-        CooldownAfterRebase -= DeltaTime;
-        return;
-    }
-
-    if (IsValid(TargetPawn))
-    {
-        CheckAndRebaseOrigin();
-        DrawDebugInfo();
-    }
-    else
-    {
-        TargetPawn = UGameplayStatics::GetPlayerPawn(GetWorld(), 0);
-    }
-}
-
-void AFloatingOriginManager::CheckAndRebaseOrigin()
-{
-    if (!IsValid(this) || !IsValid(GetWorld())) return;
-    if (!IsValid(TargetPawn)) return;
-
-    UWorld* World = GetWorld();
-    const FVector Loc = TargetPawn->GetActorLocation();
-
-    const float RebaseTrigger = OriginThreshold;
-    const float RebaseResetZone = OriginThreshold * 0.6f;
-
-    const bool bShouldRebase =
-        (FMath::Abs(Loc.X) > RebaseTrigger ||
-         FMath::Abs(Loc.Y) > RebaseTrigger ||
-         FMath::Abs(Loc.Z) > RebaseTrigger);
-
-    const bool bTooCloseToZero =
-        (FMath::Abs(Loc.X) < RebaseResetZone &&
-         FMath::Abs(Loc.Y) < RebaseResetZone &&
-         FMath::Abs(Loc.Z) < RebaseResetZone);
-
-    if (!bShouldRebase || bTooCloseToZero)
-        return;
-
-    const FIntVector Offset(
-        FMath::RoundToInt(Loc.X / GridSnap) * (int32)GridSnap,
-        FMath::RoundToInt(Loc.Y / GridSnap) * (int32)GridSnap,
-        FMath::RoundToInt(Loc.Z / GridSnap) * (int32)GridSnap);
-
-    static FIntVector LastOffset = FIntVector::ZeroValue;
-    if (Offset == LastOffset)
-        return;
-    LastOffset = Offset;
-
-    UE_LOG(LogTemp, Display, TEXT("[FloatingOrigin] Rebase trigger #%d Loc=%s Offset=%s"), RebaseCount+1, *Loc.ToString(), *Offset.ToString());
-
-    SmoothCameraFade(true);
-
-    if (!IsValid(World))
-    {
-        UE_LOG(LogTemp, Error, TEXT("[FloatingOrigin] World invalid before SetNewWorldOrigin"));
-        return;
-    }
-
-    World->SetNewWorldOrigin(Offset);
-
-    // --- Revalidate references ---
-    if (!IsValid(World))
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[FloatingOrigin] World invalid after rebasing!"));
-        return;
-    }
-
-    APlayerController* PC = UGameplayStatics::GetPlayerController(World, 0);
-    if (!IsValid(PC))
-    {
-        UE_LOG(LogTemp, Warning, TEXT("[FloatingOrigin] PlayerController invalid after rebasing!"));
-        return;
-    }
-
     if (!IsValid(TargetPawn))
     {
-        TargetPawn = PC->GetPawn();
-        if (!IsValid(TargetPawn))
-            TargetPawn = UGameplayStatics::GetPlayerPawn(World, 0);
+        TargetPawn = UGameplayStatics::GetPlayerPawn(GetWorld(), 0);
+        if (!IsValid(TargetPawn)) return;
     }
 
-    UE_LOG(LogTemp, Display, TEXT("[FloatingOrigin] Revalidated → TargetPawn=%p PC=%p World=%p"), TargetPawn, PC, World);
-
-    RebaseCount++;
-    CooldownAfterRebase = 0.5f;
-
-    if (IsValid(World) && IsValid(TargetPawn))
-    {
-        DrawDebugSphere(World, TargetPawn->GetActorLocation(), 150.f, 24, FColor::Yellow, false, 5.f);
-        DrawDebugLine(World, FVector::ZeroVector, TargetPawn->GetActorLocation(), FColor::Yellow, false, 5.f, 0, 2.f);
-    }
-
-    if (GEngine)
-    {
-        const FString Msg = FString::Printf(TEXT("[FloatingOrigin] #%d Rebased → Offset: %s"), RebaseCount, *Offset.ToString());
-        GEngine->AddOnScreenDebugMessage(-1, 3.f, FColor::Yellow, Msg);
-    }
-
-    SmoothCameraFade(false);
+    UpdateSectors(DeltaTime);
 }
 
-void AFloatingOriginManager::DrawDebugInfo()
+void AFloatingOriginManager::UpdateSectors(float DeltaTime)
 {
-    if (!IsValid(GetWorld()) || !IsValid(TargetPawn) || !GEngine) return;
+    TimeAcc += DeltaTime;
+    if (UpdatePeriod > 0.f && TimeAcc < UpdatePeriod)
+        return;
 
+    TimeAcc = 0.f;
+
+    UWorld* World = GetWorld();
+    if (!IsValid(World) || !IsValid(TargetPawn)) return;
+
+    const FVector PawnLoc = TargetPawn->GetActorLocation();
+    const FIntVector PlayerSector = WorldToSector(PawnLoc, SectorSize);
+
+    // Wrap aktere koji su van prozora
+    WrapActorsToWindow(PlayerSector, WindowRadius);
+
+    // Debug vizuelizacija sektora
+    if (bDrawSectorBoxes)
+    {
+        DrawSectorGrid(PlayerSector, WindowRadius + DebugDrawExtraRadius);
+    }
+
+    // HUD kratki
+    if (GEngine)
+    {
+        const uint64 Key = reinterpret_cast<uint64>(this);
+        GEngine->AddOnScreenDebugMessage(Key + 0, 0.f, FColor::Cyan,
+            FString::Printf(TEXT("Player Sector: [%d, %d, %d]"), PlayerSector.X, PlayerSector.Y, PlayerSector.Z));
+        GEngine->AddOnScreenDebugMessage(Key + 1, 0.f, FColor::Orange,
+            FString::Printf(TEXT("WrapCount: %d"), WrapCount));
+    }
+}
+
+void AFloatingOriginManager::WrapActorsToWindow(const FIntVector& PlayerSector, int32 Radius)
+{
     UWorld* World = GetWorld();
     if (!IsValid(World)) return;
 
-    const FVector Loc = TargetPawn->GetActorLocation();
-    const FIntVector Origin = World->OriginLocation;
+    const int32 MinX = PlayerSector.X - Radius;
+    const int32 MaxX = PlayerSector.X + Radius;
+    const int32 MinY = PlayerSector.Y - Radius;
+    const int32 MaxY = PlayerSector.Y + Radius;
+    const int32 MinZ = PlayerSector.Z - Radius;
+    const int32 MaxZ = PlayerSector.Z + Radius;
 
-    const FString PosText = FString::Printf(TEXT("Player Pos: X=%.0f  Y=%.0f  Z=%.0f"), Loc.X, Loc.Y, Loc.Z);
-    const FString ShiftText = FString::Printf(TEXT("World Shifts: %d"), RebaseCount);
-    const FString OriginText = FString::Printf(TEXT("World Origin: X=%d  Y=%d  Z=%d"), Origin.X, Origin.Y, Origin.Z);
+    for (TActorIterator<AActor> It(World); It; ++It)
+    {
+        AActor* Actor = *It;
+        if (!IsValid(Actor)) continue;
+        if (Actor == TargetPawn || Actor == this) continue;
 
-    const uint64 BaseKey = reinterpret_cast<uint64>(this);
-    GEngine->AddOnScreenDebugMessage(BaseKey + 0, 0.f, FColor::Cyan, PosText);
-    GEngine->AddOnScreenDebugMessage(BaseKey + 1, 0.f, FColor::Orange, ShiftText);
-    GEngine->AddOnScreenDebugMessage(BaseKey + 2, 0.f, FColor::Silver, OriginText);
+        if (bUseTagFilter && !Actor->ActorHasTag(MoveTag))
+            continue;
+
+        const FVector Loc = Actor->GetActorLocation();
+        const FIntVector ASector = WorldToSector(Loc, SectorSize);
+
+        FIntVector ShiftSectors(0,0,0);
+
+        if (ASector.X < MinX)      ShiftSectors.X = (MinX - ASector.X);
+        else if (ASector.X > MaxX) ShiftSectors.X = (MaxX - ASector.X);
+
+        if (ASector.Y < MinY)      ShiftSectors.Y = (MinY - ASector.Y);
+        else if (ASector.Y > MaxY) ShiftSectors.Y = (MaxY - ASector.Y);
+
+        if (ASector.Z < MinZ)      ShiftSectors.Z = (MinZ - ASector.Z);
+        else if (ASector.Z > MaxZ) ShiftSectors.Z = (MaxZ - ASector.Z);
+
+        if (ShiftSectors != FIntVector::ZeroValue)
+        {
+            const FVector Delta = FVector(ShiftSectors) * SectorSize;
+            Actor->AddActorWorldOffset(Delta, false, nullptr, ETeleportType::TeleportPhysics);
+            ++WrapCount;
+        }
+    }
 }
 
-void AFloatingOriginManager::SmoothCameraFade(bool bFadeOut)
+void AFloatingOriginManager::DrawSectorGrid(const FIntVector& PlayerSector, int32 Radius) const
 {
-    if (FadeTime <= 0.f) return;
+    UWorld* World = GetWorld();
+    if (!IsValid(World)) return;
 
-    APlayerController* PC = UGameplayStatics::GetPlayerController(GetWorld(), 0);
-    if (!IsValid(PC) || !IsValid(PC->PlayerCameraManager))
+    const float Half = SectorSize * 0.5f;
+    const FVector Extents(Half, Half, Half);
+
+    for (int32 x = -Radius; x <= Radius; ++x)
     {
-        UE_LOG(LogTemp, Warning, TEXT("[FloatingOrigin] Invalid camera manager in fade"));
-        return;
+        for (int32 y = -Radius; y <= Radius; ++y)
+        {
+            for (int32 z = -Radius; z <= Radius; ++z)
+            {
+                const FIntVector S = PlayerSector + FIntVector(x,y,z);
+                const FVector Center = SectorToWorldCenter(S, SectorSize);
+                DrawDebugBox(World, Center, Extents, FColor::Green, false, UpdatePeriod > 0.f ? UpdatePeriod : 0.f, 0, 1.5f);
+            }
+        }
     }
+}
 
-    PC->PlayerCameraManager->StartCameraFade(bFadeOut ? 0.f : 1.f, bFadeOut ? 1.f : 0.f, FadeTime, FLinearColor::Black, false, true);
+FIntVector AFloatingOriginManager::WorldToSector(const FVector& Position, float InSectorSize)
+{
+    // floor po sektoru, radi i za negativne pozicije
+    const int32 sx = FMath::FloorToInt(Position.X / InSectorSize);
+    const int32 sy = FMath::FloorToInt(Position.Y / InSectorSize);
+    const int32 sz = FMath::FloorToInt(Position.Z / InSectorSize);
+    return FIntVector(sx, sy, sz);
+}
+
+FVector AFloatingOriginManager::SectorToWorldCenter(const FIntVector& Sector, float InSectorSize)
+{
+    return FVector(Sector) * InSectorSize + FVector(InSectorSize * 0.5f);
 }
