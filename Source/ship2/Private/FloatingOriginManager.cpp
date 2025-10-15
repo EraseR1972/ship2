@@ -1,11 +1,16 @@
 #include "FloatingOriginManager.h"
+#include "EngineUtils.h"
 #include "Kismet/GameplayStatics.h"
-#include "Engine/World.h"
-#include "Engine/Engine.h"
 #include "GameFramework/Pawn.h"
-#include "DrawDebugHelpers.h"
-#include "EngineUtils.h" // TActorIterator
-#include "Math/UnrealMathUtility.h"
+#include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerStart.h"
+#include "Engine/Brush.h"
+#include "GameFramework/DefaultPhysicsVolume.h"
+#include "Engine/DirectionalLight.h"
+#include "NavigationSystem.h"
+#include "Camera/CameraActor.h"
+#include "WorldPartition/DataLayer/DataLayerSubsystem.h"
+#include "Components/PrimitiveComponent.h"
 
 AFloatingOriginManager::AFloatingOriginManager()
 {
@@ -16,141 +21,184 @@ void AFloatingOriginManager::BeginPlay()
 {
     Super::BeginPlay();
 
-    if (!TargetPawn)
+    // Subscribe to spawned actors
+    if (UWorld* World = GetWorld())
     {
-        TargetPawn = UGameplayStatics::GetPlayerPawn(GetWorld(), 0);
+        SpawnHandle = World->AddOnActorSpawnedHandler(
+            FOnActorSpawned::FDelegate::CreateUObject(this, &AFloatingOriginManager::OnActorSpawned)
+        );
     }
 
-    if (GEngine)
+    // Subscribe to level streaming (actors coming from streamed levels)
+    LevelAddedHandle = FWorldDelegates::LevelAddedToWorld.AddUObject(
+        this, &AFloatingOriginManager::OnLevelAddedToWorld
+    );
+}
+
+void AFloatingOriginManager::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+    if (UWorld* World = GetWorld())
     {
-        GEngine->AddOnScreenDebugMessage(-1, 3.f, FColor::Green,
-            TEXT("[Sectors] Manager ready (chunk wrap + visual boxes)"));
+        if (SpawnHandle.IsValid())
+        {
+            World->RemoveOnActorSpawnedHandler(SpawnHandle);
+            SpawnHandle.Reset();
+        }
     }
+    FWorldDelegates::LevelAddedToWorld.RemoveAll(this);
+
+    Super::EndPlay(EndPlayReason);
 }
 
 void AFloatingOriginManager::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
-
-    if (!IsValid(TargetPawn))
-    {
-        TargetPawn = UGameplayStatics::GetPlayerPawn(GetWorld(), 0);
-        if (!IsValid(TargetPawn)) return;
-    }
-
-    UpdateSectors(DeltaTime);
+    TimeSinceLastRebase += DeltaTime;
+    RebaseWorldIfNeeded();
 }
 
-void AFloatingOriginManager::UpdateSectors(float DeltaTime)
+static bool IsSystemActor(const AActor* A)
 {
-    TimeAcc += DeltaTime;
-    if (UpdatePeriod > 0.f && TimeAcc < UpdatePeriod)
+    return  A->IsA(ABrush::StaticClass()) ||
+            A->IsA(ADefaultPhysicsVolume::StaticClass()) ||
+            A->IsA(APlayerStart::StaticClass()) ||
+            A->IsA(ADirectionalLight::StaticClass()) ||
+            A->IsA(ANavigationData::StaticClass());
+}
+
+bool AFloatingOriginManager::ShouldShiftActor(UWorld* World, AActor* Actor) const
+{
+    if (!IsValid(Actor)) return false;
+    if (Actor == TargetPawn || Actor == this) return false;
+    if (IsSystemActor(Actor)) return false;
+
+    // Root must be Movable
+    const USceneComponent* Root = Actor->GetRootComponent();
+    if (!Root || Root->Mobility != EComponentMobility::Movable) return false;
+
+    // Actor Layer filter
+    if (RequiredLayer != NAME_None)
+    {
+        bool bInLayer = false;
+        for (const FName& L : Actor->Layers)
+        {
+            if (L == RequiredLayer) { bInLayer = true; break; }
+        }
+        if (!bInLayer) return false;
+    }
+
+    // Data Layer filter
+    if (RequiredDataLayer != NAME_None)
+    {
+        if (UDataLayerSubsystem* DLS = UWorld::GetSubsystem<UDataLayerSubsystem>(World))
+        {
+            const TArray<FName> Layers = DLS->GetDataLayerInstanceNames(Actor);
+            if (!Layers.Contains(RequiredDataLayer)) return false;
+        }
+    }
+
+    // Skip current view target CameraActor if any
+    if (APlayerController* PC = UGameplayStatics::GetPlayerController(World, 0))
+        if (Actor == PC->GetViewTarget()) return false;
+
+    return true;
+}
+
+void AFloatingOriginManager::ApplyShiftToActor(AActor* A, const FVector& Shift)
+{
+    if (!IsValid(A) || Shift.IsNearlyZero()) return;
+
+    UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(A->GetRootComponent());
+    const bool bSim = Prim ? Prim->IsSimulatingPhysics() : false;
+    const ECollisionEnabled::Type PrevColl = Prim ? Prim->GetCollisionEnabled() : ECollisionEnabled::NoCollision;
+    if (Prim) { Prim->SetSimulatePhysics(false); Prim->SetCollisionEnabled(ECollisionEnabled::NoCollision); }
+
+    const bool bPrevActorCollision = A->GetActorEnableCollision();
+    A->SetActorEnableCollision(false);
+
+    A->AddActorWorldOffset(Shift, false, nullptr, ETeleportType::TeleportPhysics);
+
+    if (Prim)
+    {
+        Prim->SetCollisionEnabled(PrevColl);
+        Prim->SetSimulatePhysics(bSim);
+        if (bSim) Prim->WakeAllRigidBodies();
+        Prim->UpdateComponentToWorld();
+        Prim->MarkRenderTransformDirty();
+    }
+    A->SetActorEnableCollision(bPrevActorCollision);
+}
+
+void AFloatingOriginManager::OnActorSpawned(AActor* A)
+{
+    if (!IsValid(A)) return;
+    UWorld* World = GetWorld();
+    if (!World) return;
+
+    // Apply accumulated shift to any newly spawned/streamed actor that passes filters
+    if (!AccumulatedShift.IsNearlyZero() && ShouldShiftActor(World, A))
+    {
+        ApplyShiftToActor(A, -AccumulatedShift);
+        UE_LOG(LogTemp, Verbose, TEXT("[FOM] Spawn shift %s by %s"), *A->GetName(), *AccumulatedShift.ToString());
+    }
+}
+
+void AFloatingOriginManager::OnLevelAddedToWorld(ULevel* Level, UWorld* InWorld)
+{
+    if (!InWorld || AccumulatedShift.IsNearlyZero()) return;
+
+    // Shift actors of this level as they come in
+    for (AActor* A : Level->Actors)
+    {
+        if (!IsValid(A)) continue;
+        if (ShouldShiftActor(InWorld, A))
+        {
+            ApplyShiftToActor(A, -AccumulatedShift);
+            UE_LOG(LogTemp, Verbose, TEXT("[FOM] Stream shift %s by %s"), *A->GetName(), *AccumulatedShift.ToString());
+        }
+    }
+}
+
+void AFloatingOriginManager::RebaseWorldIfNeeded()
+{
+    if (!TargetPawn) return;
+
+    // Require a filter to avoid moving whole world by accident
+    if (RequiredLayer == NAME_None && RequiredDataLayer == NAME_None)
         return;
 
-    TimeAcc = 0.f;
-
-    UWorld* World = GetWorld();
-    if (!IsValid(World) || !IsValid(TargetPawn)) return;
-
     const FVector PawnLoc = TargetPawn->GetActorLocation();
-    const FIntVector PlayerSector = WorldToSector(PawnLoc, SectorSize);
 
-    // Wrap aktere koji su van prozora
-    WrapActorsToWindow(PlayerSector, WindowRadius);
+    // Sector step (integer) to avoid jitter; rebase only when leaving central sector
+    const FIntVector Sector(
+        FMath::FloorToInt(PawnLoc.X / SectorSize),
+        FMath::FloorToInt(PawnLoc.Y / SectorSize),
+        FMath::FloorToInt(PawnLoc.Z / SectorSize)
+    );
 
-    // Debug vizuelizacija sektora
-    if (bDrawSectorBoxes)
-    {
-        DrawSectorGrid(PlayerSector, WindowRadius + DebugDrawExtraRadius);
-    }
+    if (Sector == FIntVector::ZeroValue) return;
 
-    // HUD kratki
-    if (GEngine)
-    {
-        const uint64 Key = reinterpret_cast<uint64>(this);
-        GEngine->AddOnScreenDebugMessage(Key + 0, 0.f, FColor::Cyan,
-            FString::Printf(TEXT("Player Sector: [%d, %d, %d]"), PlayerSector.X, PlayerSector.Y, PlayerSector.Z));
-        GEngine->AddOnScreenDebugMessage(Key + 1, 0.f, FColor::Orange,
-            FString::Printf(TEXT("WrapCount: %d"), WrapCount));
-    }
-}
+    if (TimeSinceLastRebase < RebaseCooldown) return;
+    TimeSinceLastRebase = 0.f;
 
-void AFloatingOriginManager::WrapActorsToWindow(const FIntVector& PlayerSector, int32 Radius)
-{
+    const FVector Offset = FVector(Sector) * SectorSize;   // move by whole sectors
+    AccumulatedShift += Offset;                             // remember total shift
+
     UWorld* World = GetWorld();
-    if (!IsValid(World)) return;
-
-    const int32 MinX = PlayerSector.X - Radius;
-    const int32 MaxX = PlayerSector.X + Radius;
-    const int32 MinY = PlayerSector.Y - Radius;
-    const int32 MaxY = PlayerSector.Y + Radius;
-    const int32 MinZ = PlayerSector.Z - Radius;
-    const int32 MaxZ = PlayerSector.Z + Radius;
+    if (!World) return;
 
     for (TActorIterator<AActor> It(World); It; ++It)
     {
-        AActor* Actor = *It;
-        if (!IsValid(Actor)) continue;
-        if (Actor == TargetPawn || Actor == this) continue;
-
-        if (bUseTagFilter && !Actor->ActorHasTag(MoveTag))
-            continue;
-
-        const FVector Loc = Actor->GetActorLocation();
-        const FIntVector ASector = WorldToSector(Loc, SectorSize);
-
-        FIntVector ShiftSectors(0,0,0);
-
-        if (ASector.X < MinX)      ShiftSectors.X = (MinX - ASector.X);
-        else if (ASector.X > MaxX) ShiftSectors.X = (MaxX - ASector.X);
-
-        if (ASector.Y < MinY)      ShiftSectors.Y = (MinY - ASector.Y);
-        else if (ASector.Y > MaxY) ShiftSectors.Y = (MaxY - ASector.Y);
-
-        if (ASector.Z < MinZ)      ShiftSectors.Z = (MinZ - ASector.Z);
-        else if (ASector.Z > MaxZ) ShiftSectors.Z = (MaxZ - ASector.Z);
-
-        if (ShiftSectors != FIntVector::ZeroValue)
-        {
-            const FVector Delta = FVector(ShiftSectors) * SectorSize;
-            Actor->AddActorWorldOffset(Delta, false, nullptr, ETeleportType::TeleportPhysics);
-            ++WrapCount;
-        }
+        AActor* A = *It;
+        if (!ShouldShiftActor(World, A)) continue;
+        ApplyShiftToActor(A, -Offset);
     }
-}
 
-void AFloatingOriginManager::DrawSectorGrid(const FIntVector& PlayerSector, int32 Radius) const
-{
-    UWorld* World = GetWorld();
-    if (!IsValid(World)) return;
+    // Keep pawn relative position inside central sector
+    const FVector NewPawnLoc = PawnLoc - Offset;
+    TargetPawn->SetActorLocation(NewPawnLoc, false, nullptr, ETeleportType::TeleportPhysics);
 
-    const float Half = SectorSize * 0.5f;
-    const FVector Extents(Half, Half, Half);
-
-    for (int32 x = -Radius; x <= Radius; ++x)
-    {
-        for (int32 y = -Radius; y <= Radius; ++y)
-        {
-            for (int32 z = -Radius; z <= Radius; ++z)
-            {
-                const FIntVector S = PlayerSector + FIntVector(x,y,z);
-                const FVector Center = SectorToWorldCenter(S, SectorSize);
-                DrawDebugBox(World, Center, Extents, FColor::Green, false, UpdatePeriod > 0.f ? UpdatePeriod : 0.f, 0, 1.5f);
-            }
-        }
-    }
-}
-
-FIntVector AFloatingOriginManager::WorldToSector(const FVector& Position, float InSectorSize)
-{
-    // floor po sektoru, radi i za negativne pozicije
-    const int32 sx = FMath::FloorToInt(Position.X / InSectorSize);
-    const int32 sy = FMath::FloorToInt(Position.Y / InSectorSize);
-    const int32 sz = FMath::FloorToInt(Position.Z / InSectorSize);
-    return FIntVector(sx, sy, sz);
-}
-
-FVector AFloatingOriginManager::SectorToWorldCenter(const FIntVector& Sector, float InSectorSize)
-{
-    return FVector(Sector) * InSectorSize + FVector(InSectorSize * 0.5f);
+    if (APlayerController* PC = UGameplayStatics::GetPlayerController(World, 0))
+        if (PC->PlayerCameraManager)
+            PC->PlayerCameraManager->SetGameCameraCutThisFrame();
 }

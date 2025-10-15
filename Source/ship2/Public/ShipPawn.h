@@ -2,13 +2,13 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
-#include "Camera/CameraComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "ShipPawn.generated.h"
 
 /**
- * AShipPawn — 6DoF kinematički brod (bez fizike), sa Boost-om i alatima za debug kolizije.
- * Napomena: Ako ti se modul ne zove Ship2, zameni SHIP2_API sa <TVOJMODUL>_API i preimenuj folder u Source/<TvojModul>/...
+ * AShipPawn — 6DoF kinematički brod bez kamere u C++.
+ * Kamera može biti dodata iz Blueprint-a.
+ * Kolizija je na parent mesh-u (ShipMesh) koji je root.
  */
 UCLASS()
 class SHIP2_API AShipPawn : public APawn
@@ -27,47 +27,42 @@ public:
 
 private:
     /* --- Components --- */
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Ship", meta=(AllowPrivateAccess="true"))
+    // Root i collider
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Ship", meta=(AllowPrivateAccess="true"))
     UStaticMeshComponent* ShipMesh;
 
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Ship", meta=(AllowPrivateAccess="true"))
-    UCameraComponent* Camera;
-
-    /* --- Translation input (kinematic) --- */
+    /* --- Kretanje i rotacija --- */
     void MoveForward(float Value);
     void MoveRight(float Value);
     void MoveUp(float Value);
 
-    /* --- Rotation input --- */
-    void Pitch(float Value); // Mouse Y (invert kao u FPS)
-    void Yaw(float Value);   // Mouse X
-    void Roll(float Value);  // Q/E
+    void Pitch(float Value);
+    void Yaw(float Value);
+    void Roll(float Value);
 
-    /* --- Boost (Left Shift) --- */
     void BoostPressed();
     void BoostReleased();
 
-    /* --- Debug (console: DebugCollision) --- */
+    /* --- Debug --- */
     UFUNCTION(Exec)
     void DebugCollision();
 
-    void DebugSweepForward();
+    void DebugSweepForward() const;
 
 private:
-    /* Tunables */
+    /* --- Parametri --- */
     UPROPERTY(EditAnywhere, Category="Ship|Movement")
-    float MoveSpeed = 1200.f;                 // Osnovna brzina (cm/s)
+    float MoveSpeed = 1200.f;
 
     UPROPERTY(EditAnywhere, Category="Ship|Movement")
-    float BoostMultiplier = 4.f;              // Faktor ubrzanja dok je Shift pritisnut
+    float BoostMultiplier = 4.f;
 
     UPROPERTY(EditAnywhere, Category="Ship|Rotation")
-    float MouseSensitivityDegPerSec = 120.f;  // °/s pri inputu 1.0 (yaw/pitch)
+    float MouseSensitivityDegPerSec = 120.f;
 
     UPROPERTY(EditAnywhere, Category="Ship|Rotation")
-    float RollSpeedDegPerSec = 90.f;          // °/s pri inputu 1.0 (roll)
+    float RollSpeedDegPerSec = 90.f;
 
-    /* Runtime state */
     bool bIsBoosting = false;
-    FVector LocalVelocity = FVector::ZeroVector; // X fwd, Y right, Z up
+    FVector LocalVelocity = FVector::ZeroVector;
 };
